@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-gee_project_id = os.getenv('GEE_PROJECT_ID', 'ee-vvdev25')
+gee_project_id = os.getenv('GEE_PROJECT_ID')
 ee.Initialize(project=gee_project_id)
 
 logging.basicConfig(level=logging.INFO)
