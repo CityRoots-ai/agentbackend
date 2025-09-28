@@ -331,7 +331,7 @@ async def handle_create_proposal_intent(selected_park_id, session_id, message):
             end_date = date_match.group(1).title()
 
     park_name = analysis_data.get("parkName", "Selected Park")
-    
+
     proposal_summary = f"""
 🏛️ **COMMUNITY PROPOSAL: PARK PROTECTION INITIATIVE**
 
@@ -383,19 +383,88 @@ Based on the environmental impact analysis, removing {park_name} would significa
 *Generated from environmental analysis performed on {removal_analysis.get('timestamp', 'recent analysis')}*
 """
 
-    return {
-        "sessionId": session_id,
-        "action": "proposal_created",
-        "reply": f"Community proposal created for {park_name} with deadline {end_date}. The proposal includes comprehensive environmental impact analysis and is ready for community review.",
-        "data": {
-            "parkId": selected_park_id,
-            "parkName": park_name,
-            "proposalSummary": proposal_summary,
-            "endDate": end_date,
-            "analysisData": analysis_data,
-            "timestamp": datetime.now().isoformat()
-        }
+    # Prepare proposal data for blockchain
+    proposal_data = {
+        "parkId": selected_park_id,
+        "parkName": park_name,
+        "proposalSummary": proposal_summary,
+        "endDate": end_date,
+        "analysisData": analysis_data,
+        "timestamp": datetime.now().isoformat()
     }
+
+    # Try to submit to blockchain
+    try:
+        from blockchain import BlockchainService
+        blockchain_service = BlockchainService()
+
+        # Check if blockchain is properly configured
+        if not blockchain_service.is_connected():
+            logger.warning("Blockchain not connected, creating proposal locally only")
+            return {
+                "sessionId": session_id,
+                "action": "proposal_created",
+                "reply": f"Community proposal created for {park_name} with deadline {end_date}. The proposal includes comprehensive environmental impact analysis and is ready for community review.\n\n⚠️ Note: Blockchain submission disabled - proposal created locally only.",
+                "data": proposal_data
+            }
+
+        blockchain_result = await blockchain_service.create_proposal_on_blockchain(proposal_data)
+
+        if blockchain_result['success']:
+            # Success - include blockchain details in reply
+            reply = f"""Community proposal created for {park_name} with deadline {end_date}.
+
+✅ **Successfully submitted to Sepolia blockchain!**
+📋 Proposal ID: #{blockchain_result.get('proposal_id', 'Pending')}
+🔗 Transaction: {blockchain_result['transaction_hash'][:10]}...{blockchain_result['transaction_hash'][-8:]}
+🌐 View on explorer: {blockchain_result['explorer_url']}
+⛽ Gas used: {blockchain_result.get('gas_used', 'Unknown'):,}
+
+The proposal includes comprehensive environmental impact analysis and is ready for community review."""
+
+            return {
+                "sessionId": session_id,
+                "action": "proposal_created",
+                "reply": reply,
+                "data": {
+                    **proposal_data,
+                    "blockchain": blockchain_result
+                }
+            }
+        else:
+            # Blockchain failed - create locally with warning
+            reply = f"""Community proposal created for {park_name} with deadline {end_date}.
+
+⚠️ **Blockchain submission failed:** {blockchain_result.get('error', 'Unknown error')}
+
+The proposal has been created locally and includes comprehensive environmental impact analysis. It is ready for community review, but was not submitted to the blockchain."""
+
+            return {
+                "sessionId": session_id,
+                "action": "proposal_created",
+                "reply": reply,
+                "data": {
+                    **proposal_data,
+                    "blockchain": {"error": blockchain_result.get('error')}
+                }
+            }
+
+    except ImportError:
+        logger.warning("Blockchain module not available")
+        return {
+            "sessionId": session_id,
+            "action": "proposal_created",
+            "reply": f"Community proposal created for {park_name} with deadline {end_date}. The proposal includes comprehensive environmental impact analysis and is ready for community review.\n\n⚠️ Note: Blockchain integration not available - proposal created locally only.",
+            "data": proposal_data
+        }
+    except Exception as e:
+        logger.error(f"Blockchain integration error: {str(e)}")
+        return {
+            "sessionId": session_id,
+            "action": "proposal_created",
+            "reply": f"Community proposal created for {park_name} with deadline {end_date}. The proposal includes comprehensive environmental impact analysis and is ready for community review.\n\n⚠️ Note: Blockchain submission failed ({str(e)}) - proposal created locally only.",
+            "data": proposal_data
+        }
 
 async def handle_analyze_request(request: AnalyzeRequest):
     """Handle analyze endpoint requests"""
