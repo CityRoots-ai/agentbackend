@@ -17,6 +17,11 @@ from utils import (
 
 logger = logging.getLogger(__name__)
 
+# Import session storage from main module
+def get_session_storage():
+    from main import session_storage
+    return session_storage
+
 async def handle_agent_request(request: AgentRequest, client: genai.Client):
     """Handle agent requests and process user queries about parks"""
     try:
@@ -56,6 +61,11 @@ Examples:
 - "PM2.5 levels" -> air_quality_query intent
 - "air pollution near this park" -> air_quality_query intent
 - "how polluted is this area" -> air_quality_query intent
+- "propose this to the community" -> create_proposal intent
+- "create a proposal" -> create_proposal intent
+- "submit this as proposal" -> create_proposal intent
+- "submit proposal with end date" -> create_proposal intent
+- "create proposal with deadline 25th october 2025" -> create_proposal intent
 - "hello" -> greeting intent"""
 
         try:
@@ -92,6 +102,8 @@ Examples:
             return await handle_park_info_query_intent(selected_park_id, session_id, client)
         elif parsed.get("intent") == "air_quality_query":
             return await handle_air_quality_query_intent(selected_park_id, session_id)
+        elif parsed.get("intent") == "create_proposal":
+            return await handle_create_proposal_intent(selected_park_id, session_id, message)
         elif parsed.get("intent") == "greeting":
             return handle_greeting_intent(session_id)
 
@@ -184,6 +196,17 @@ async def handle_park_removal_impact_intent(parsed, selected_park_id, session_id
     impact = await analyze_park_removal_impact(
         selected_park_id, parsed.get("landUseType", "removed")
     )
+
+    # Store the removal analysis result in session storage
+    storage = get_session_storage()
+    if session_id not in storage:
+        storage[session_id] = {}
+
+    storage[session_id]["latest_removal_analysis"] = {
+        "park_id": selected_park_id,
+        "analysis_data": impact,
+        "timestamp": datetime.now().isoformat()
+    }
 
     return {
         "sessionId": session_id,
@@ -279,6 +302,99 @@ def handle_greeting_intent(session_id):
         "sessionId": session_id,
         "action": "answer",
         "reply": reply,
+    }
+
+async def handle_create_proposal_intent(selected_park_id, session_id, message):
+    """Handle create proposal intent"""
+    storage = get_session_storage()
+
+    # Check if park removal analysis was performed first
+    if session_id not in storage or "latest_removal_analysis" not in storage[session_id]:
+        return {
+            "sessionId": session_id,
+            "action": "need_analysis",
+            "reply": "Please analyze the park removal first before creating a proposal. Ask 'what happens if removed' for the selected park.",
+        }
+
+    removal_analysis = storage[session_id]["latest_removal_analysis"]
+    analysis_data = removal_analysis["analysis_data"]
+
+    # Extract end date from message if provided
+    end_date = "October 25, 2025"  # Default date
+    if "25th october" in message.lower() or "october 25" in message.lower():
+        end_date = "October 25, 2025"
+    elif "date" in message.lower() or "deadline" in message.lower():
+        import re
+        date_pattern = r'\b(\d{1,2}(?:st|nd|rd|th)?\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{4})\b'
+        date_match = re.search(date_pattern, message.lower())
+        if date_match:
+            end_date = date_match.group(1).title()
+
+    park_name = analysis_data.get("parkName", "Selected Park")
+    
+    proposal_summary = f"""
+🏛️ **COMMUNITY PROPOSAL: PARK PROTECTION INITIATIVE**
+
+**Park:** {park_name}
+**Proposal Deadline:** {end_date}
+**Status:** OPEN FOR COMMUNITY INPUT
+
+---
+
+**📊 ENVIRONMENTAL IMPACT ANALYSIS**
+
+**Vegetation Health Impact:**
+• Current NDVI: {analysis_data.get('ndviBefore', 'Unknown')}
+• Post-removal NDVI: {analysis_data.get('ndviAfter', 'Unknown')}
+• Vegetation loss: {round((analysis_data.get('ndviBefore', 0) - analysis_data.get('ndviAfter', 0)) * 100, 1) if analysis_data.get('ndviBefore') and analysis_data.get('ndviAfter') else 'Unknown'}%
+
+**Air Quality Impact:**
+• Current PM2.5: {analysis_data.get('pm25Before', 'Unknown')} μg/m³
+• Projected PM2.5: {analysis_data.get('pm25After', 'Unknown')} μg/m³
+• Pollution increase: +{analysis_data.get('pm25IncreasePercent', 'Unknown')}%
+
+**Community Impact:**
+• Population affected: {analysis_data.get('affectedPopulation10MinWalk', 0):,} residents
+• Demographics impacted:
+  - Children: {analysis_data.get('demographics', {}).get('kids', 0):,}
+  - Adults: {analysis_data.get('demographics', {}).get('adults', 0):,}
+  - Seniors: {analysis_data.get('demographics', {}).get('seniors', 0):,}
+
+---
+
+**🎯 PROPOSAL SUMMARY**
+
+Based on the environmental impact analysis, removing {park_name} would significantly harm our community through:
+
+1. **Environmental Degradation:** {round((analysis_data.get('ndviBefore', 0) - analysis_data.get('ndviAfter', 0)) * 100, 1) if analysis_data.get('ndviBefore') and analysis_data.get('ndviAfter') else 'Significant'}% loss in vegetation health
+2. **Air Quality Decline:** {analysis_data.get('pm25IncreasePercent', 'Substantial')}% increase in air pollution
+3. **Community Health Impact:** {analysis_data.get('affectedPopulation10MinWalk', 0):,} residents losing access to green space
+
+**We propose to PROTECT this vital community asset and explore alternative development solutions that preserve environmental and public health.**
+
+---
+
+**📝 COMMUNITY ACTION ITEMS**
+• Review environmental impact data
+• Attend community meetings before {end_date}
+• Submit feedback to local planning committee
+• Share this proposal with neighbors and stakeholders
+
+*Generated from environmental analysis performed on {removal_analysis.get('timestamp', 'recent analysis')}*
+"""
+
+    return {
+        "sessionId": session_id,
+        "action": "proposal_created",
+        "reply": f"Community proposal created for {park_name} with deadline {end_date}. The proposal includes comprehensive environmental impact analysis and is ready for community review.",
+        "data": {
+            "parkId": selected_park_id,
+            "parkName": park_name,
+            "proposalSummary": proposal_summary,
+            "endDate": end_date,
+            "analysisData": analysis_data,
+            "timestamp": datetime.now().isoformat()
+        }
     }
 
 async def handle_analyze_request(request: AnalyzeRequest):

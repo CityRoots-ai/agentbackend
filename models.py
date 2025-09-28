@@ -29,6 +29,7 @@ class Intent(str, Enum):
     PARK_STAT_QUERY = "park_stat_query"
     PARK_INFO_QUERY = "park_info_query"
     AIR_QUALITY_QUERY = "air_quality_query"
+    CREATE_PROPOSAL = "create_proposal"
 
 class LocationType(str, Enum):
     ZIP = "zip"

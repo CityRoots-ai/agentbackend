@@ -38,6 +38,9 @@ load_dotenv()
 # Suppress pydantic warnings from google-genai package
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 
+# Session storage for tracking removal analysis results
+session_storage: Dict[str, Dict[str, Any]] = {}
+
 gee_project_id = os.getenv('GEE_PROJECT_ID')
 ee.Initialize(project=gee_project_id)
 
