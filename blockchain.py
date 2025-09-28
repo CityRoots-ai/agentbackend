@@ -117,6 +117,79 @@ class BlockchainService:
                 "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
                 "stateMutability": "view",
                 "type": "function"
+            },
+            {
+                "inputs": [],
+                "name": "getAllActiveProposals",
+                "outputs": [{"internalType": "uint256[]", "name": "", "type": "uint256[]"}],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            {
+                "inputs": [],
+                "name": "getAllClosedProposals",
+                "outputs": [{"internalType": "uint256[]", "name": "", "type": "uint256[]"}],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            {
+                "inputs": [
+                    {"internalType": "uint256", "name": "_proposalId", "type": "uint256"}
+                ],
+                "name": "getEnvironmentalData",
+                "outputs": [
+                    {"internalType": "uint256", "name": "ndviBefore", "type": "uint256"},
+                    {"internalType": "uint256", "name": "ndviAfter", "type": "uint256"},
+                    {"internalType": "uint256", "name": "pm25Before", "type": "uint256"},
+                    {"internalType": "uint256", "name": "pm25After", "type": "uint256"},
+                    {"internalType": "uint256", "name": "pm25IncreasePercent", "type": "uint256"},
+                    {"internalType": "uint256", "name": "vegetationLossPercent", "type": "uint256"}
+                ],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            {
+                "inputs": [
+                    {"internalType": "uint256", "name": "_proposalId", "type": "uint256"}
+                ],
+                "name": "getDemographics",
+                "outputs": [
+                    {"internalType": "uint256", "name": "children", "type": "uint256"},
+                    {"internalType": "uint256", "name": "adults", "type": "uint256"},
+                    {"internalType": "uint256", "name": "seniors", "type": "uint256"},
+                    {"internalType": "uint256", "name": "totalAffectedPopulation", "type": "uint256"}
+                ],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            {
+                "inputs": [
+                    {"internalType": "uint256", "name": "_proposalId", "type": "uint256"},
+                    {"internalType": "address", "name": "_user", "type": "address"}
+                ],
+                "name": "getUserVote",
+                "outputs": [{"internalType": "enum CommunityVoting.Vote", "name": "", "type": "uint8"}],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            {
+                "inputs": [
+                    {"internalType": "uint256", "name": "_proposalId", "type": "uint256"},
+                    {"internalType": "address", "name": "_user", "type": "address"}
+                ],
+                "name": "hasUserVoted",
+                "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            {
+                "inputs": [
+                    {"internalType": "uint256", "name": "_proposalId", "type": "uint256"}
+                ],
+                "name": "isProposalActive",
+                "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+                "stateMutability": "view",
+                "type": "function"
             }
         ]
 
