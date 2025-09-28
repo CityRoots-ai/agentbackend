@@ -9,11 +9,16 @@ import ee
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from openai import OpenAI
+from google import genai
+from google.genai import types
 import logging
+import warnings
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Suppress pydantic warnings from google-genai package
+warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 
 gee_project_id = os.getenv('GEE_PROJECT_ID')
 ee.Initialize(project=gee_project_id)
@@ -57,15 +62,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    raise ValueError("OPENAI_API_KEY environment variable is required")
+gemini_api_key = os.getenv("GEMINI_API_KEY")
+if not gemini_api_key:
+    raise ValueError("GEMINI_API_KEY environment variable is required")
 
 try:
-    openai_client = OpenAI(api_key=api_key)
-    logger.info("OpenAI client initialized successfully")
+    client = genai.Client(api_key=gemini_api_key)
+    logger.info("Gemini API client initialized successfully")
 except Exception as e:
-    logger.error(f"Failed to initialize OpenAI client: {e}")
+    logger.error(f"Failed to initialize Gemini API client: {e}")
     raise e
 
 class AgentRequest(BaseModel):
@@ -85,40 +90,60 @@ class AnalyzeRequest(BaseModel):
 class NDVIRequest(BaseModel):
     geometry: Dict[str, Any]
 
-SYSTEM_PROMPT = """
-You are a highly capable urban planning assistant embedded in a GIS-aware chatbot.
-Your role is to interpret natural language queries and return STRICT JSON in the following structure:
-{
-  "intent": "show_parks" | "ask_area" | "greeting" | "unknown" | "park_removal_impact" | "park_ndvi_query" | "park_stat_query",
-  "locationType": "zip" | "city" | "state" | null,
-  "locationValue": string | null,
-  "unit": "acres" | "m2" | "km2" | "hectares" | null,
-  "landUseType": "removed" | "replaced_by_building" | null,
-  "metric": string | null
-}
+from enum import Enum
 
-Examples:
-- "show parks in Austin" => show_parks, city: Austin
-- "show parks of zipcode 20008" => show_parks, zip, 20008
-- "give me area of this park" => ask_area
-- "how big is this park in hectares" => ask_area, unit: hectares
-- "what is the area in square meters?" => ask_area, unit: "m2"
-- "What happens if this park is removed?" => park_removal_impact, landUseType: removed
-- "Replace this park with commercial buildings" => park_removal_impact, landUseType: replaced_by_building
-- "what's the NDVI of this park?" => intent: "park_ndvi_query"
-- "how many Asian people are served by this park?" => intent: "park_stat_query", metric: "SUM_ASIAN_"
-- "what's the total population in the park's service area?" => intent: "park_stat_query", metric: "SUM_TOTPOP"
-- "How many seniors are in this area?" => intent: "park_stat_query", metric: "SUM_SENIOR"
-- "How many kids are in this area?" => intent: "park_stat_query", metric: "SUM_KIDSVC"
-- "What's the per acre density?" => intent: "park_stat_query", metric: "PERACRE"
-- "what income group is most served here?" => intent: "park_stat_query", metric: "income_distribution"
-- "how many Hispanic households are in the service area?" => intent: "park_stat_query", metric: "SUM_HISP_S"
-- "hello" => greeting
+class Intent(str, Enum):
+    SHOW_PARKS = "show_parks"
+    ASK_AREA = "ask_area"
+    GREETING = "greeting"
+    UNKNOWN = "unknown"
+    PARK_REMOVAL_IMPACT = "park_removal_impact"
+    PARK_NDVI_QUERY = "park_ndvi_query"
+    PARK_STAT_QUERY = "park_stat_query"
 
-Respond with ONLY the JSON, no explanation or comments.
-"""
+class LocationType(str, Enum):
+    ZIP = "zip"
+    CITY = "city"
+    STATE = "state"
+
+class Unit(str, Enum):
+    ACRES = "acres"
+    M2 = "m2"
+    KM2 = "km2"
+    HECTARES = "hectares"
+
+class LandUseType(str, Enum):
+    REMOVED = "removed"
+    REPLACED_BY_BUILDING = "replaced_by_building"
+
+class IntentClassification(BaseModel):
+    intent: Intent
+    locationType: Optional[LocationType] = None
+    locationValue: Optional[str] = None
+    unit: Optional[Unit] = None
+    landUseType: Optional[LandUseType] = None
+    metric: Optional[str] = None
 def geometry_from_geojson(geojson):
-    return ee.Geometry(geojson)
+    try:
+        if not geojson:
+            raise ValueError("GeoJSON is None or empty")
+
+        if isinstance(geojson, str):
+            geojson = json.loads(geojson)
+
+        if not isinstance(geojson, dict):
+            raise ValueError("GeoJSON must be a dictionary")
+
+        if 'type' not in geojson:
+            raise ValueError("GeoJSON missing 'type' property")
+
+        if 'coordinates' not in geojson:
+            raise ValueError("GeoJSON missing 'coordinates' property")
+
+        return ee.Geometry(geojson)
+    except Exception as e:
+        logger.error(f"Invalid GeoJSON geometry: {e}")
+        raise ValueError(f"Invalid GeoJSON geometry: {e}")
 
 def compute_ndvi(geometry):
     collection = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2") \
@@ -322,8 +347,12 @@ async def analyze_park_removal_impact(park_id: str, land_use_type: str = "remove
         if not stats:
             raise HTTPException(status_code=404, detail="Park statistics not found")
 
-        park_geom = geometry_from_geojson(geometry)
-        buffer_geom = park_geom.buffer(800)
+        try:
+            park_geom = geometry_from_geojson(geometry)
+            buffer_geom = park_geom.buffer(800)
+        except ValueError as e:
+            logger.error(f"Geometry error for park {park_id}: {e}")
+            raise HTTPException(status_code=400, detail=f"Invalid park geometry: {str(e)}")
 
         ndvi_before = compute_ndvi(buffer_geom)
         walkability_before = compute_walkability(buffer_geom)
@@ -379,9 +408,16 @@ async def get_park_ndvi(park_id: str):
         if not row:
             raise HTTPException(status_code=404, detail="Park not found")
 
-        geometry = geometry_from_geojson(row["geometry"])
-        ndvi_value = compute_ndvi(geometry)
-        return ndvi_value
+        try:
+            geometry = geometry_from_geojson(row["geometry"])
+            ndvi_value = compute_ndvi(geometry)
+            return ndvi_value
+        except ValueError as e:
+            logger.error(f"Geometry error for park {park_id}: {e}")
+            raise HTTPException(status_code=400, detail=f"Invalid park geometry: {str(e)}")
+        except Exception as e:
+            logger.error(f"NDVI computation error for park {park_id}: {e}")
+            raise HTTPException(status_code=500, detail=f"Error computing NDVI: {str(e)}")
 
 @app.post("/api/agent")
 async def agent_endpoint(request: AgentRequest):
@@ -391,18 +427,42 @@ async def agent_endpoint(request: AgentRequest):
         selected_park_id = ui_context.get("selectedParkId")
         session_id = request.sessionId or str(int(datetime.now().timestamp() * 1000000) % 1000000)
 
-        response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": message}
-            ],
-            temperature=0
-        )
+        # Enhanced prompt for structured output with more examples
+        prompt = f"""Analyze this user query about parks and classify the intent:
+
+User query: "{message}"
+
+Examples:
+- "show parks in Austin" -> show_parks intent, city location
+- "show parks in zipcode 24060" -> show_parks intent, zip location
+- "find parks in 90210" -> show_parks intent, zip location
+- "parks in TX" -> show_parks intent, state location
+- "how big is this park" -> ask_area intent
+- "park area in square meters" -> ask_area intent, m2 unit
+- "what's the NDVI of this park" -> park_ndvi_query intent
+- "how green is this park" -> park_ndvi_query intent
+- "how many people live here" -> park_stat_query intent, metric: "SUM_TOTPOP"
+- "total population" -> park_stat_query intent, metric: "SUM_TOTPOP"
+- "Asian population served" -> park_stat_query intent, metric: "SUM_ASIAN_"
+- "what happens if removed" -> park_removal_impact intent, landUseType: removed
+- "hello" -> greeting intent"""
 
         try:
-            parsed = json.loads(response.choices[0].message.content)
-        except json.JSONDecodeError:
+            response = client.models.generate_content(
+                model="gemini-2.0-flash-exp",
+                contents=prompt,
+                config={
+                    "response_mime_type": "application/json",
+                    "response_schema": IntentClassification,
+                }
+            )
+            logger.info(f"Gemini structured response: {response.text}")
+
+            # Parse the structured JSON response
+            parsed = json.loads(response.text)
+
+        except Exception as e:
+            logger.error(f"Gemini API error: {e}")
             parsed = {"intent": "unknown"}
 
         logger.info(f"Parsed intent: {parsed.get('intent')}")
@@ -557,8 +617,12 @@ async def analyze_endpoint(request: AnalyzeRequest):
         geometry = request.geometry
         land_use_type = request.landUseType
 
-        park_geom = geometry_from_geojson(geometry)
-        buffer_geom = park_geom.buffer(800)
+        try:
+            park_geom = geometry_from_geojson(geometry)
+            buffer_geom = park_geom.buffer(800)
+        except ValueError as e:
+            logger.error(f"Geometry error in analyze endpoint: {e}")
+            raise HTTPException(status_code=400, detail=f"Invalid geometry: {str(e)}")
 
         ndvi_before = compute_ndvi(buffer_geom)
         walkability_before = compute_walkability(buffer_geom)
@@ -593,13 +657,20 @@ async def analyze_endpoint(request: AnalyzeRequest):
 @app.post("/api/ndvi")
 async def ndvi_endpoint(request: NDVIRequest):
     try:
-        geometry = geometry_from_geojson(request.geometry)
+        try:
+            geometry = geometry_from_geojson(request.geometry)
+        except ValueError as e:
+            logger.error(f"Geometry error in NDVI endpoint: {e}")
+            raise HTTPException(status_code=400, detail=f"Invalid geometry: {str(e)}")
+
         ndvi_value = compute_ndvi(geometry)
 
         return {
             "ndvi": round(ndvi_value, 4) if ndvi_value is not None else None
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in NDVI endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
